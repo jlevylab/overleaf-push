@@ -124,6 +124,25 @@ function init() {
   const say = text => { btn.textContent = text; };
   chrome.runtime.onMessage.addListener(m => { if (m.type === 'progress') say(m.text); });
 
+  // Tell him when the loaded copy is behind the source, rather than letting him
+  // wonder why a fix did nothing.
+  chrome.runtime.sendMessage({ type: 'update' }).then(u => {
+    if (!u) return;
+    btn.title = `Overleaf to git ${u.running}`;
+    if (u.stale) {
+      btn.classList.add('stale');
+      btn.title = `Running ${u.running}, but ${u.latest} is available. `
+                + `Reload the extension at chrome://extensions, then reload this tab.`;
+      const note = document.createElement('div');
+      note.id = 'olpush-stale';
+      note.textContent = `Overleaf to git ${u.latest} is ready. `
+                       + `Reload it at chrome://extensions (you are on ${u.running}).`;
+      note.title = 'click to dismiss';
+      note.addEventListener('click', () => note.remove());
+      document.body.appendChild(note);
+    }
+  }).catch(() => {});
+
   btn.addEventListener('click', () => push({ recompileFirst: true }, say));
 
   // Pressing Overleaf's own Recompile should push too, so there is only ever

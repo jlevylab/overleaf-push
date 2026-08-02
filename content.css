@@ -12,6 +12,23 @@
 #olpush-btn:disabled { opacity: .85; cursor: default; }
 #olpush-btn.ok  { background: #1f7a3d; }
 #olpush-btn.bad { background: #8b2020; }
+#olpush-btn.stale { background: #a35c00; }
+#olpush-btn.stale:hover:not(:disabled) { background: #c06e00; }
+
+#olpush-stale {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  max-width: 340px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: #a35c00;
+  color: #fff;
+  font: 500 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .35);
+  cursor: pointer;
+}
 
 /* in the toolbar, next to Recompile */
 #olpush-btn[data-placement="toolbar"] {

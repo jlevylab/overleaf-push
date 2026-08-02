@@ -181,8 +181,46 @@ async function rememberProject(id, name) {
   await chrome.storage.local.set({ projects });
 }
 
+// --- "you are running old code" ------------------------------------------
+// The loaded copy cannot see the folder it came from, so it asks the mirror
+// repo instead: EXTENSION_VERSION at the repo root holds the version that
+// should be running. Bumped whenever the extension source changes.
+function newer(a, b) {
+  const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
+async function checkForUpdate() {
+  try {
+    const cfg = await settings();
+    const running = chrome.runtime.getManifest().version;
+    const res = await gh(
+      `/repos/${cfg.owner}/${cfg.repo}/contents/EXTENSION_VERSION`, {}, cfg);
+    const latest = atob(res.content.replace(/\s/g, '')).trim();
+    const stale = newer(latest, running);
+    await chrome.storage.local.set({ update: { running, latest, stale } });
+    return { running, latest, stale };
+  } catch (_) {
+    return null;          // no token yet, no marker file, offline: never nag
+  }
+}
+
+chrome.runtime.onInstalled.addListener(checkForUpdate);
+chrome.runtime.onStartup.addListener(checkForUpdate);
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'seen') { rememberProject(msg.projectId, msg.projectName); return false; }
+  if (msg.type === 'update') {
+    chrome.storage.local.get('update').then(async s => {
+      sendResponse(s.update || await checkForUpdate());
+      checkForUpdate();                       // refresh in the background
+    });
+    return true;
+  }
   if (msg.type !== 'sync') return false;
   const report = (text) => {
     try { chrome.tabs.sendMessage(sender.tab.id, { type: 'progress', text }); } catch (_) {}
