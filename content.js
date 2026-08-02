@@ -1,10 +1,14 @@
-// Injects the button into Overleaf and drives the recompile.
+// Injects the button into Overleaf, drives the recompile, and pushes after any
+// compile you start yourself.
 //
-// Everything here is Overleaf-DOM dependent, which is the brittle part of the
-// extension. It is written to degrade rather than break: if the recompile
-// button cannot be found, the sync still happens, and the button says so.
+// Everything here depends on Overleaf's DOM, which is the brittle part of the
+// extension. It is written to degrade rather than break.
 
 const PROJECT_ID = (location.pathname.match(/\/project\/([0-9a-f]{24})/) || [])[1];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let busy = false;
+let btn;
+
 if (PROJECT_ID) init();
 
 function projectName() {
@@ -14,49 +18,87 @@ function projectName() {
   return document.title.replace(/\s*[-–|]\s*Overleaf.*$/i, '').trim();
 }
 
-function findRecompile() {
-  const byTest = document.querySelector('[data-testid="recompile-button"], .btn-recompile');
-  if (byTest) return byTest;
+// Overleaf relabels this same button "Compiling…" while a build runs, which is
+// a far more reliable signal than hunting for spinner class names.
+function compileButton() {
   return [...document.querySelectorAll('button')]
-    .find(b => /recompile|compile/i.test(b.textContent || ''));
+    .find(b => b.id !== 'olpush-btn' && /^(recompile|compiling)/i.test((b.textContent || '').trim()));
 }
 
 function isCompiling() {
-  return !!document.querySelector(
-    '[class*="compiling"], [data-testid="compile-status"] [class*="spinner"], .pdf-loading-indicator');
+  const b = compileButton();
+  if (b && /compiling/i.test(b.textContent || '')) return true;
+  return !!document.querySelector('[class*="compiling"], .pdf-loading-indicator');
 }
 
 function pdfUrl() {
   const frame = document.querySelector('iframe[src*="/output/"], object[data*="/output/"]');
   const src = frame && (frame.src || frame.data);
   if (src) return src;
-  const link = [...document.querySelectorAll('a[href*="/output/output.pdf"]')][0];
+  const link = document.querySelector('a[href*="/output/output.pdf"]');
   return link ? link.href : null;
 }
 
-async function recompile(say) {
-  const btn = findRecompile();
-  if (!btn) { say('no recompile button found, syncing anyway'); return false; }
-  say('recompiling');
-  btn.click();
-
-  // give it a moment to enter the compiling state, then wait for it to leave
-  await new Promise(r => setTimeout(r, 1200));
-  const deadline = Date.now() + 180000;   // a long book can take a while
-  while (isCompiling() && Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  if (Date.now() >= deadline) { say('compile still running, syncing sources anyway'); return false; }
-  await new Promise(r => setTimeout(r, 1500));   // let the viewer settle on the new PDF
+async function waitForCompile(say) {
+  const t0 = Date.now();
+  while (!isCompiling() && Date.now() - t0 < 8000) await sleep(250);   // let it start
+  if (!isCompiling()) return false;                                     // it never did
+  while (isCompiling() && Date.now() - t0 < 240000) { say('compiling'); await sleep(500); }
+  await sleep(1500);                                                    // let the viewer swap in the new PDF
   return true;
 }
 
+// --- the shared push -------------------------------------------------------
+async function push({ recompileFirst }, say) {
+  if (busy) return;
+  busy = true;
+  btn.disabled = true;
+  btn.classList.remove('ok', 'bad');
+  try {
+    let compiled = false;
+    if (recompileFirst) {
+      const rc = compileButton();
+      if (rc) { say('recompiling'); rc.click(); compiled = await waitForCompile(say); }
+      else say('no recompile button, pushing anyway');
+    } else {
+      compiled = await waitForCompile(say);
+    }
+
+    say('sending');
+    const res = await chrome.runtime.sendMessage({
+      type: 'sync',
+      projectId: PROJECT_ID,
+      projectName: projectName(),
+      pdfUrl: compiled ? pdfUrl() : null,
+    });
+
+    if (res && res.ok) {
+      btn.classList.add('ok');
+      say(res.changed ? res.message : 'already up to date');
+    } else {
+      btn.classList.add('bad');
+      say((res && res.error) || 'failed');
+      console.error('[overleaf-push]', res && res.error);
+    }
+  } catch (e) {
+    btn.classList.add('bad');
+    say(String(e.message || e));
+    console.error('[overleaf-push]', e);
+  } finally {
+    busy = false;
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.classList.remove('ok', 'bad');
+      say('Push to git');
+    }, 6000);
+  }
+}
+
 // Sit in the toolbar beside Recompile. Overleaf's editor is React and rerenders
-// that bar, so the button gets re-mounted whenever it is torn out, and falls
-// back to floating bottom-right if the toolbar cannot be found at all.
-function mount(btn) {
+// that bar, so re-mount whenever the button is torn out.
+function mount() {
   if (btn.isConnected) return;
-  const rc = findRecompile();
+  const rc = compileButton();
   const group = rc && (rc.closest('[class*="toolbar"] > *') || rc.parentElement);
   if (group && group.parentElement) {
     group.parentElement.insertBefore(btn, group.nextSibling);
@@ -72,48 +114,31 @@ function init() {
     type: 'seen', projectId: PROJECT_ID, projectName: projectName(),
   });
 
-  const btn = document.createElement('button');
+  btn = document.createElement('button');
   btn.id = 'olpush-btn';
   btn.type = 'button';
   btn.textContent = 'Push to git';
-  mount(btn);
-  new MutationObserver(() => mount(btn))
-    .observe(document.body, { childList: true, subtree: true });
+  mount();
+  new MutationObserver(mount).observe(document.body, { childList: true, subtree: true });
 
-  const say = (text) => { btn.textContent = text; };
+  const say = text => { btn.textContent = text; };
   chrome.runtime.onMessage.addListener(m => { if (m.type === 'progress') say(m.text); });
 
-  btn.addEventListener('click', async () => {
-    if (btn.disabled) return;
-    btn.disabled = true;
-    btn.classList.remove('ok', 'bad');
-    try {
-      const compiled = await recompile(say);
-      say('sending');
-      const res = await chrome.runtime.sendMessage({
-        type: 'sync',
-        projectId: PROJECT_ID,
-        projectName: projectName(),
-        pdfUrl: compiled ? pdfUrl() : null,
-      });
-      if (res && res.ok) {
-        btn.classList.add('ok');
-        say(res.changed ? res.message : 'already up to date');
-      } else {
-        btn.classList.add('bad');
-        say((res && res.error) || 'failed');
-        console.error('[overleaf-push]', res && res.error);
-      }
-    } catch (e) {
-      btn.classList.add('bad');
-      say(String(e.message || e));
-      console.error('[overleaf-push]', e);
-    } finally {
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.classList.remove('ok', 'bad');
-        say('Push to git');
-      }, 6000);
+  btn.addEventListener('click', () => push({ recompileFirst: true }, say));
+
+  // Pressing Overleaf's own Recompile should push too, so there is only ever
+  // one thing to press. Capture phase, because React stops propagation.
+  document.addEventListener('click', e => {
+    const t = e.target.closest && e.target.closest('button');
+    if (!t || t.id === 'olpush-btn' || busy) return;
+    if (!/^recompile/i.test((t.textContent || '').trim())) return;
+    setTimeout(() => push({ recompileFirst: false }, say), 300);
+  }, true);
+
+  // Ctrl/Cmd+Enter is the shortcut for the same thing.
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !busy) {
+      setTimeout(() => push({ recompileFirst: false }, say), 300);
     }
-  });
+  }, true);
 }
