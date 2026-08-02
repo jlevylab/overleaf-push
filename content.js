@@ -51,6 +51,22 @@ async function recompile(say) {
   return true;
 }
 
+// Sit in the toolbar beside Recompile. Overleaf's editor is React and rerenders
+// that bar, so the button gets re-mounted whenever it is torn out, and falls
+// back to floating bottom-right if the toolbar cannot be found at all.
+function mount(btn) {
+  if (btn.isConnected) return;
+  const rc = findRecompile();
+  const group = rc && (rc.closest('[class*="toolbar"] > *') || rc.parentElement);
+  if (group && group.parentElement) {
+    group.parentElement.insertBefore(btn, group.nextSibling);
+    btn.dataset.placement = 'toolbar';
+  } else {
+    document.body.appendChild(btn);
+    btn.dataset.placement = 'floating';
+  }
+}
+
 function init() {
   chrome.runtime.sendMessage({
     type: 'seen', projectId: PROJECT_ID, projectName: projectName(),
@@ -58,8 +74,11 @@ function init() {
 
   const btn = document.createElement('button');
   btn.id = 'olpush-btn';
+  btn.type = 'button';
   btn.textContent = 'Push to git';
-  document.body.appendChild(btn);
+  mount(btn);
+  new MutationObserver(() => mount(btn))
+    .observe(document.body, { childList: true, subtree: true });
 
   const say = (text) => { btn.textContent = text; };
   chrome.runtime.onMessage.addListener(m => { if (m.type === 'progress') say(m.text); });
