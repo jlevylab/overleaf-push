@@ -9,6 +9,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 let busy = false;
 let btn;
 
+// Reloading the extension orphans the content script already running in an open
+// tab. Chrome's own wording for that is "Extension context invalidated", which
+// tells you nothing about what to do. Say the useful thing instead.
+const orphaned = e => /context invalidated|Extension context/i.test(String((e && e.message) || e));
+
 if (PROJECT_ID) init();
 
 function projectName() {
@@ -82,8 +87,13 @@ async function push({ recompileFirst }, say) {
     }
   } catch (e) {
     btn.classList.add('bad');
-    say(String(e.message || e));
-    console.error('[overleaf-push]', e);
+    if (orphaned(e)) {
+      say('Reload this tab');
+      btn.title = 'The extension was reloaded. Refresh this page and the button works again.';
+    } else {
+      say(String(e.message || e));
+      console.error('[overleaf-push]', e);
+    }
   } finally {
     busy = false;
     setTimeout(() => {
@@ -141,7 +151,9 @@ function init() {
       note.addEventListener('click', () => note.remove());
       document.body.appendChild(note);
     }
-  }).catch(() => {});
+  }).catch(e => {
+    if (orphaned(e)) { btn.classList.add('bad'); say('Reload this tab'); }
+  });
 
   btn.addEventListener('click', () => push({ recompileFirst: true }, say));
 
