@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Overleaf to git</title>
+<style>
+  body { font: 14px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+         max-width: 620px; margin: 40px auto; padding: 0 20px; color: #222; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  p.sub { color: #666; margin-top: 0; }
+  label { display: block; margin: 16px 0 4px; font-weight: 600; }
+  input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
+  button { margin-top: 20px; padding: 9px 18px; border: 0; border-radius: 5px;
+           background: #2f4f4f; color: #fff; font: inherit; cursor: pointer; }
+  #msg { margin-top: 14px; min-height: 20px; }
+  .ok { color: #1f7a3d; } .bad { color: #8b2020; }
+  small { color: #666; display: block; margin-top: 4px; }
+  ul { color: #444; } code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+</style>
+
+<h1>Overleaf to git</h1>
+<p class="sub">Recompile, then commit the project and its PDF straight to GitHub.</p>
+
+<label>GitHub token</label>
+<input id="token" type="password" placeholder="github_pat_...">
+<small>Fine-grained, this repository only, with <code>Contents: read and write</code>.
+Nothing else. Stored in extension storage on this machine.</small>
+
+<label>Owner</label>
+<input id="owner" placeholder="levylabpitt">
+
+<label>Repository</label>
+<input id="repo" placeholder="overleaf">
+
+<label>Branch</label>
+<input id="branch" placeholder="main">
+
+<button id="save">Save</button>
+<div id="msg"></div>
+
+<h3>How it works</h3>
+<ul>
+  <li>Projects land in <code>overleaf/&lt;project-id&gt;/</code>.</li>
+  <li>Overleaf needs no token: the extension uses the session you are already signed into.</li>
+  <li>Files you delete in Overleaf are deleted in the mirror, so it stays a true copy.</li>
+  <li>The repo must already exist and have at least one commit.</li>
+</ul>
+
+<h3>Projects seen</h3>
+<div id="projects"></div>
+
+<script src="options.js"></script>

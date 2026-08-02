@@ -1,0 +1,20 @@
+#olpush-btn {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 6px;
+  background: #2f4f4f;
+  color: #fff;
+  font: 500 13px/1.2 system-ui, -apple-system, Segoe UI, sans-serif;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
+  cursor: pointer;
+  max-width: 320px;
+  text-align: center;
+}
+#olpush-btn:hover:not(:disabled) { background: #3d6666; }
+#olpush-btn:disabled { opacity: .85; cursor: default; }
+#olpush-btn.ok  { background: #1f7a3d; }
+#olpush-btn.bad { background: #8b2020; }
