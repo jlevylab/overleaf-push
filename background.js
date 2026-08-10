@@ -1,14 +1,16 @@
 // Service worker: does the work the page cannot.
 //
 // Overleaf auth is just the browser session, so fetching the project zip needs
-// no token at all. The only secret in this extension is a GitHub fine-grained
-// PAT scoped to the one mirror repo.
+// no token at all. The only secret in this extension is the GitHub token, which
+// the options page obtains through the device flow (see auth.js) and leaves in
+// extension storage. Getting that token is not this file's job: a service worker
+// is stopped while idle and cannot sit through a fifteen-minute authorization.
 
 const GH = 'https://api.github.com';
 
 async function settings() {
   const s = await chrome.storage.local.get(['token', 'owner', 'repo', 'branch']);
-  if (!s.token) throw new Error('No GitHub token set. Open the extension options.');
+  if (!s.token) throw new Error('Not connected to GitHub. Open the extension options and press Connect.');
   if (!s.owner || !s.repo) throw new Error('No target repo set. Open the extension options.');
   return { branch: 'main', ...s };
 }
@@ -25,6 +27,11 @@ async function gh(path, opts = {}, cfg) {
     },
   });
   if (!r.ok) {
+    // A dead token is the one failure with an obvious next step, and the raw
+    // body ("Bad credentials") does not suggest it.
+    if (r.status === 401) {
+      throw new Error('GitHub rejected the token. Open the extension options and press Connect.');
+    }
     const body = await r.text();
     throw new Error(`GitHub ${r.status} on ${path}: ${body.slice(0, 300)}`);
   }

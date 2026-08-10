@@ -5,24 +5,63 @@
   body { font: 14px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
          max-width: 620px; margin: 40px auto; padding: 0 20px; color: #222; }
   h1 { font-size: 20px; margin-bottom: 4px; }
+  h3 { margin-top: 32px; }
   p.sub { color: #666; margin-top: 0; }
   label { display: block; margin: 16px 0 4px; font-weight: 600; }
   input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
   button { margin-top: 20px; padding: 9px 18px; border: 0; border-radius: 5px;
            background: #2f4f4f; color: #fff; font: inherit; cursor: pointer; }
-  #msg { margin-top: 14px; min-height: 20px; }
-  .ok { color: #1f7a3d; } .bad { color: #8b2020; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.quiet { background: #eee; color: #333; }
+  #msg, #authMsg { margin-top: 14px; min-height: 20px; }
+  .ok { color: #1f7a3d; } .bad { color: #8b2020; } .warn { color: #a35c00; }
   small { color: #666; display: block; margin-top: 4px; }
   ul { color: #444; } code { background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+  details { margin-top: 18px; }
+  summary { cursor: pointer; color: #555; }
+
+  .panel { margin-top: 10px; padding: 14px 16px; border: 1px solid #ddd; border-radius: 6px; }
+  .who { font-weight: 600; }
+  #device .code { font: 600 30px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+                  letter-spacing: 3px; margin: 10px 0 4px; }
+  #device .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  #device button { margin-top: 12px; }
+  .countdown { color: #666; }
 </style>
 
 <h1>Overleaf to git</h1>
 <p class="sub">Recompile, then commit the project and its PDF straight to GitHub.</p>
 
-<label>GitHub token</label>
-<input id="token" type="password" placeholder="github_pat_...">
-<small>Fine-grained, this repository only, with <code>Contents: read and write</code>.
-Nothing else. Stored in extension storage on this machine.</small>
+<label>GitHub access</label>
+<div class="panel">
+  <div id="authState">checking...</div>
+  <div class="row">
+    <button id="connect">Connect GitHub</button>
+    <button id="disconnect" class="quiet" hidden>Disconnect</button>
+  </div>
+
+  <div id="device" hidden>
+    <div>Type this code on github.com:</div>
+    <div class="code" id="userCode"></div>
+    <div class="row">
+      <button id="copyCode" class="quiet">Copy code</button>
+      <button id="openGitHub">Open github.com</button>
+      <button id="cancel" class="quiet">Cancel</button>
+    </div>
+    <div class="countdown" id="countdown"></div>
+  </div>
+
+  <div id="authMsg"></div>
+</div>
+
+<details id="manual">
+  <summary>Paste a token by hand instead</summary>
+  <label>GitHub token</label>
+  <input id="token" type="password" placeholder="github_pat_...">
+  <small>A fine-grained token, this repository only, with <code>Contents: read and write</code>.
+  Nothing else. Stored in extension storage on this machine.</small>
+  <button id="saveToken">Save token</button>
+</details>
 
 <label>Owner</label>
 <input id="owner" placeholder="levylabpitt">
@@ -36,6 +75,21 @@ Nothing else. Stored in extension storage on this machine.</small>
 <button id="save">Save</button>
 <div id="msg"></div>
 
+<details id="advanced">
+  <summary>Advanced</summary>
+  <label>Client ID</label>
+  <input id="clientId" placeholder="Iv23li...">
+  <small>The app the Connect button signs into. Comes from <code>config.js</code>;
+  set it here only to point at a different app.</small>
+
+  <label>Scope</label>
+  <input id="scope" placeholder="(blank)">
+  <small>Blank for a GitHub App. Set it to <code>repo</code> only if you registered
+  an OAuth App, which has no per-repository permissions of its own.</small>
+
+  <button id="saveAdvanced" class="quiet">Save advanced</button>
+</details>
+
 <h3>How it works</h3>
 <ul>
   <li>Projects land in <code>overleaf/&lt;project-id&gt;/</code>.</li>
@@ -47,4 +101,6 @@ Nothing else. Stored in extension storage on this machine.</small>
 <h3>Projects seen</h3>
 <div id="projects"></div>
 
+<script src="config.js"></script>
+<script src="auth.js"></script>
 <script src="options.js"></script>
