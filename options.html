@@ -27,6 +27,14 @@
   #device .row { display: flex; gap: 10px; flex-wrap: wrap; }
   #device button { margin-top: 12px; }
   .countdown { color: #666; }
+
+  .ptable { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  .ptable td { padding: 8px 8px 8px 0; border-top: 1px solid #eee; vertical-align: top; }
+  .pname { width: 34%; font-size: 13px; }
+  .ptable input { padding: 5px 6px; font-size: 12px; margin-bottom: 4px; }
+  .pgo { width: 130px; }
+  .pgo button { margin-top: 0; margin-right: 4px; padding: 5px 10px; font-size: 12px; }
+  .r-state { color: #666; font-size: 12px; margin-top: 6px; }
 </style>
 
 <h1>Overleaf to git</h1>
@@ -92,14 +100,27 @@
 
 <h3>How it works</h3>
 <ul>
-  <li>Projects land in <code>overleaf/&lt;project-id&gt;/</code>.</li>
+  <li>By default a project lands in the mirror above, under
+      <code>overleaf/&lt;project-id&gt;/</code>. That needs no per-project setup, which is
+      what makes it work across hundreds of projects.</li>
+  <li>A project that has a repo of its own can be routed there instead, below. Then
+      the button updates the real project rather than a backup nobody reads.</li>
   <li>Overleaf needs no token: the extension uses the session you are already signed into.</li>
-  <li>Files you delete in Overleaf are deleted in the mirror, so it stays a true copy.</li>
-  <li>The repo must already exist and have at least one commit.</li>
+  <li>In the mirror, files you delete in Overleaf are deleted too, so it stays a true copy.
+      A routed push only adds and updates: the repo holds files Overleaf has never heard of
+      (scripts, <code>.gitignore</code>, CI) and deleting those would be destructive.</li>
+  <li>A routed push does not commit the PDF. In the mirror the id keeps PDFs from
+      colliding; in a project's own repo a stale committed PDF beside the source is how
+      you end up reading an old version.</li>
+  <li>The target repo must already exist and have at least one commit, and the GitHub
+      app must be installed on it.</li>
 </ul>
 
-<h3>Projects seen</h3>
+<h3>Projects</h3>
+<p class="sub">Leave a project alone and it goes to the mirror. Give it an owner and a
+repository and it goes there instead, at the path you choose (blank means the repo root).</p>
 <div id="projects"></div>
+<div id="routeMsg"></div>
 
 <script src="config.js"></script>
 <script src="auth.js"></script>

@@ -15,6 +15,60 @@ async function settings() {
   return { branch: 'main', ...s };
 }
 
+// Where a given project goes.
+//
+// The default is the shared mirror: one repo, every project under
+// overleaf/<id>/, no per-project setup. That is what makes this work across
+// hundreds of projects. But a project that has a repo of its own should push
+// there instead, at the repo root, so that pressing the button in Overleaf
+// updates the actual project rather than a backup nobody reads. A route says so.
+async function routeFor(projectId, cfg) {
+  const { routes = {} } = await chrome.storage.local.get('routes');
+  const r = routes[projectId];
+  if (r && r.owner && r.repo) {
+    return {
+      owner: r.owner,
+      repo: r.repo,
+      branch: r.branch || 'main',
+      base: (r.path || '').replace(/^\/+|\/+$/g, ''),   // '' means the repo root
+      routed: true,
+    };
+  }
+  return {
+    owner: cfg.owner,
+    repo: cfg.repo,
+    branch: cfg.branch,
+    base: `overleaf/${projectId}`,
+    routed: false,
+  };
+}
+
+// A route that points somewhere the token cannot write fails deep inside the
+// commit, with a 404 that reads like a typo. Say the real thing instead.
+async function assertWritable(dest, cfg) {
+  const r = await fetch(`${GH}/repos/${dest.owner}/${dest.repo}`, {
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (r.status === 404 || r.status === 403) {
+    throw new Error(
+      `The GitHub token cannot reach ${dest.owner}/${dest.repo}. `
+      + `The app is installed on some repositories only. Install it on this one at `
+      + `https://github.com/settings/installations (or the organisation's Settings, `
+      + `Applications), then press the button again.`);
+  }
+  if (!r.ok) throw new Error(`GitHub ${r.status} checking ${dest.owner}/${dest.repo}`);
+  const info = await r.json();
+  if (info.permissions && info.permissions.push === false) {
+    throw new Error(`The token can read ${dest.owner}/${dest.repo} but not write to it. `
+      + 'Give the app Contents: read and write on that repository.');
+  }
+  return info;
+}
+
 async function gh(path, opts = {}, cfg) {
   const r = await fetch(GH + path, {
     ...opts,
@@ -98,7 +152,9 @@ function b64(bytes) {
 // --- the actual sync -------------------------------------------------------
 async function sync({ projectId, projectName, pdfUrl }, report) {
   const cfg = await settings();
-  const base = `overleaf/${projectId}`;
+  const dest = await routeFor(projectId, cfg);
+  const base = dest.base;
+  await assertWritable(dest, cfg);
 
   report('fetching project from Overleaf');
   const zipRes = await fetch(`https://www.overleaf.com/project/${projectId}/download/zip`, {
@@ -112,31 +168,43 @@ async function sync({ projectId, projectName, pdfUrl }, report) {
     try {
       const p = await fetch(pdfUrl, { credentials: 'include' });
       if (p.ok) {
-        files.push({ name: `${projectId}.pdf`, bytes: new Uint8Array(await p.arrayBuffer()) });
-        report(`${files.length} files including the compiled PDF`);
+        // In the shared mirror the id keeps PDFs from colliding. In a project's
+        // own repo that name is noise, and a stale committed PDF sitting beside
+        // the source is how people end up reading an old version.
+        if (!dest.routed) {
+          files.push({ name: `${projectId}.pdf`, bytes: new Uint8Array(await p.arrayBuffer()) });
+          report(`${files.length} files including the compiled PDF`);
+        }
       }
     } catch (_) { /* PDF is a bonus, never fatal */ }
   }
 
-  const { owner, repo, branch } = cfg;
+  const { owner, repo, branch } = dest;
   const ref = await gh(`/repos/${owner}/${repo}/git/ref/heads/${branch}`, {}, cfg);
   const headSha = ref.object.sha;
   const headCommit = await gh(`/repos/${owner}/${repo}/git/commits/${headSha}`, {}, cfg);
   const baseTree = headCommit.tree.sha;
 
-  // Anything currently under overleaf/<id>/ that the project no longer has
-  // must be deleted, or the mirror silently accumulates dead files.
-  const existing = await gh(
-    `/repos/${owner}/${repo}/git/trees/${baseTree}?recursive=1`, {}, cfg);
-  const had = new Set(
-    (existing.tree || [])
-      .filter(e => e.type === 'blob' && e.path.startsWith(base + '/'))
-      .map(e => e.path));
+  // In the mirror the whole subtree belongs to the extension, so anything the
+  // project no longer has must go or the mirror accumulates dead files.
+  //
+  // A project's own repo is different: it holds files the extension did not put
+  // there (scripts, .gitignore, CI, a README) and deleting those because
+  // Overleaf has never heard of them would be destructive. Routed pushes
+  // therefore add and update, and never delete.
+  const had = new Set();
+  if (!dest.routed) {
+    const existing = await gh(
+      `/repos/${owner}/${repo}/git/trees/${baseTree}?recursive=1`, {}, cfg);
+    for (const e of existing.tree || []) {
+      if (e.type === 'blob' && e.path.startsWith(base + '/')) had.add(e.path);
+    }
+  }
 
   report(`uploading ${files.length} files`);
   const tree = [];
   for (const f of files) {
-    const path = `${base}/${f.name}`;
+    const path = base ? `${base}/${f.name}` : f.name;
     const blob = await gh(`/repos/${owner}/${repo}/git/blobs`, {
       method: 'POST',
       body: JSON.stringify({ content: b64(f.bytes), encoding: 'base64' }),
@@ -175,7 +243,7 @@ async function sync({ projectId, projectName, pdfUrl }, report) {
   await rememberProject(projectId, projectName);
   return {
     changed: true,
-    message: `pushed ${files.length} files`,
+    message: `pushed ${files.length} files to ${owner}/${repo}`,
     url: `https://github.com/${owner}/${repo}/commit/${commit.sha}`,
   };
 }
@@ -221,6 +289,17 @@ chrome.runtime.onStartup.addListener(checkForUpdate);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'seen') { rememberProject(msg.projectId, msg.projectName); return false; }
+  // So the page can say where the button will push, before it is pressed.
+  if (msg.type === 'where') {
+    settings()
+      .then(cfg => routeFor(msg.projectId, cfg))
+      .then(d => sendResponse({
+        ok: true, owner: d.owner, repo: d.repo, branch: d.branch,
+        path: d.base, routed: d.routed,
+      }))
+      .catch(e => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
   if (msg.type === 'update') {
     chrome.storage.local.get('update').then(async s => {
       sendResponse(s.update || await checkForUpdate());

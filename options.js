@@ -192,23 +192,88 @@ $('saveAdvanced').addEventListener('click', async () => {
   say($('authMsg'), 'Saved.', 'ok');
 });
 
-// --- projects seen ---------------------------------------------------------
-function render(projects) {
+// --- projects, and where each one goes -------------------------------------
+async function render(projects) {
   const ids = Object.keys(projects);
   if (!ids.length) {
     $('projects').textContent = 'None yet. Open a project in Overleaf and it appears here.';
     return;
   }
+  const { routes = {} } = await chrome.storage.local.get('routes');
   const rows = ids
     .sort((a, b) => (projects[b].seen || '').localeCompare(projects[a].seen || ''))
     .map(id => {
       const p = projects[id];
-      return `<tr><td style="padding:2px 12px 2px 0">${escapeHtml(p.name || '(unnamed)')}</td>
-              <td style="padding:2px 0"><a href="https://www.overleaf.com/project/${id}"
-              target="_blank"><code>${id}</code></a></td></tr>`;
+      const r = routes[id] || {};
+      const routed = !!(r.owner && r.repo);
+      return `<tr data-id="${id}" class="prow">
+        <td class="pname">${escapeHtml(p.name || '(unnamed)')}<br>
+          <a href="https://www.overleaf.com/project/${id}" target="_blank"><code>${id}</code></a></td>
+        <td>
+          <input class="r-owner"  placeholder="owner  (blank = mirror)" value="${escapeHtml(r.owner || '')}">
+          <input class="r-repo"   placeholder="repository"              value="${escapeHtml(r.repo || '')}">
+          <input class="r-branch" placeholder="main"                    value="${escapeHtml(r.branch || '')}">
+          <input class="r-path"   placeholder="path in repo (blank = root)" value="${escapeHtml(r.path || '')}">
+        </td>
+        <td class="pgo">
+          <button class="quiet r-save">Save</button>
+          <button class="quiet r-test">Test</button>
+          <div class="r-state">${routed
+            ? `&rarr; ${escapeHtml(r.owner)}/${escapeHtml(r.repo)}`
+            : '&rarr; mirror'}</div>
+        </td></tr>`;
     })
     .join('');
-  $('projects').innerHTML = `<table>${rows}</table>`;
+  $('projects').innerHTML =
+    `<table class="ptable"><tbody>${rows}</tbody></table>`;
+
+  for (const row of document.querySelectorAll('tr.prow')) {
+    const id = row.dataset.id;
+    const read = () => ({
+      owner: row.querySelector('.r-owner').value.trim(),
+      repo: row.querySelector('.r-repo').value.trim(),
+      branch: row.querySelector('.r-branch').value.trim() || 'main',
+      path: row.querySelector('.r-path').value.trim(),
+    });
+
+    row.querySelector('.r-save').addEventListener('click', async () => {
+      const r = read();
+      const { routes = {} } = await chrome.storage.local.get('routes');
+      if (!r.owner || !r.repo) {
+        delete routes[id];
+        row.querySelector('.r-state').innerHTML = '&rarr; mirror';
+      } else {
+        routes[id] = r;
+        row.querySelector('.r-state').innerHTML = `&rarr; ${escapeHtml(r.owner)}/${escapeHtml(r.repo)}`;
+      }
+      await chrome.storage.local.set({ routes });
+      say($('routeMsg'), 'Saved.', 'ok');
+    });
+
+    row.querySelector('.r-test').addEventListener('click', async () => {
+      const r = read();
+      if (!r.owner || !r.repo) { say($('routeMsg'), 'This project goes to the mirror.', 'ok'); return; }
+      say($('routeMsg'), `checking ${r.owner}/${r.repo}...`);
+      const { token } = await chrome.storage.local.get('token');
+      if (!token) { say($('routeMsg'), 'Connect to GitHub first.', 'bad'); return; }
+      try {
+        const res = await fetch(`https://api.github.com/repos/${r.owner}/${r.repo}/branches/${r.branch}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        });
+        if (res.ok) {
+          say($('routeMsg'), `${r.owner}/${r.repo} on ${r.branch} is reachable.`, 'ok');
+        } else if (res.status === 404 || res.status === 403) {
+          say($('routeMsg'),
+            `Cannot reach ${r.owner}/${r.repo}. The app is installed on some repositories only. `
+            + 'Add this one at github.com/settings/installations, then test again.', 'bad');
+        } else {
+          say($('routeMsg'), `GitHub said ${res.status}.`, 'bad');
+        }
+      } catch (e) {
+        say($('routeMsg'), String(e.message || e), 'bad');
+      }
+    });
+  }
 }
 
 function escapeHtml(s) {

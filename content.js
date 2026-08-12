@@ -99,7 +99,8 @@ async function push({ recompileFirst }, say) {
     setTimeout(() => {
       btn.disabled = false;
       btn.classList.remove('ok', 'bad');
-      say('Push to git');
+      const t = btn.dataset.target;
+      say(t ? `Push to ${t.split('/')[1]}` : 'Push to git');
     }, 6000);
   }
 }
@@ -134,11 +135,25 @@ function init() {
   const say = text => { btn.textContent = text; };
   chrome.runtime.onMessage.addListener(m => { if (m.type === 'progress') say(m.text); });
 
+  // Say where the button will push before it is pressed. Pressing a button
+  // labelled "Push to git" and finding the work somewhere else is the whole
+  // failure this is meant to prevent.
+  chrome.runtime.sendMessage({ type: 'where', projectId: PROJECT_ID }).then(w => {
+    if (!w || !w.ok) return;
+    const target = w.path ? `${w.owner}/${w.repo}/${w.path}` : `${w.owner}/${w.repo}`;
+    btn.dataset.target = target;
+    btn.textContent = w.routed ? `Push to ${w.repo}` : 'Push to mirror';
+    btn.title = w.routed
+      ? `Pushes to ${target} on ${w.branch}.`
+      : `Pushes to the mirror ${target} on ${w.branch}. `
+        + 'To send this project to its own repo instead, set a route in the extension options.';
+  }).catch(() => {});
+
   // Tell him when the loaded copy is behind the source, rather than letting him
   // wonder why a fix did nothing.
   chrome.runtime.sendMessage({ type: 'update' }).then(u => {
     if (!u) return;
-    btn.title = `Overleaf to git ${u.running}`;
+    if (!btn.title) btn.title = `Overleaf to git ${u.running}`;
     if (u.stale) {
       btn.classList.add('stale');
       btn.title = `Running ${u.running}, but ${u.latest} is available. `
