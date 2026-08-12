@@ -214,13 +214,14 @@ async function render(projects) {
           <input class="r-repo"   placeholder="repository"              value="${escapeHtml(r.repo || '')}">
           <input class="r-branch" placeholder="main"                    value="${escapeHtml(r.branch || '')}">
           <input class="r-path"   placeholder="path in repo (blank = root)" value="${escapeHtml(r.path || '')}">
+          <label style="font-weight:400;margin:2px 0 0"><input type="checkbox" class="r-mirror" style="width:auto" ${r.mirror ? 'checked' : ''}> force to mirror</label>
         </td>
         <td class="pgo">
           <button class="quiet r-save">Save</button>
           <button class="quiet r-test">Test</button>
           <div class="r-state">${routed
             ? `&rarr; ${escapeHtml(r.owner)}/${escapeHtml(r.repo)}`
-            : '&rarr; mirror'}</div>
+            : (r.mirror ? '&rarr; mirror (forced)' : '&rarr; auto')}</div>
         </td></tr>`;
     })
     .join('');
@@ -234,14 +235,18 @@ async function render(projects) {
       repo: row.querySelector('.r-repo').value.trim(),
       branch: row.querySelector('.r-branch').value.trim() || 'main',
       path: row.querySelector('.r-path').value.trim(),
+      mirror: row.querySelector('.r-mirror').checked,
     });
 
     row.querySelector('.r-save').addEventListener('click', async () => {
       const r = read();
       const { routes = {} } = await chrome.storage.local.get('routes');
-      if (!r.owner || !r.repo) {
+      if (r.mirror) {
+        routes[id] = { mirror: true };
+        row.querySelector('.r-state').innerHTML = '&rarr; mirror (forced)';
+      } else if (!r.owner || !r.repo) {
         delete routes[id];
-        row.querySelector('.r-state').innerHTML = '&rarr; mirror';
+        row.querySelector('.r-state').innerHTML = '&rarr; auto';
       } else {
         routes[id] = r;
         row.querySelector('.r-state').innerHTML = `&rarr; ${escapeHtml(r.owner)}/${escapeHtml(r.repo)}`;
@@ -278,4 +283,23 @@ async function render(projects) {
 
 function escapeHtml(s) {
   return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+
+// --- repositories the token can write to -----------------------------------
+async function repoCount(fresh) {
+  const el = $('repoCount');
+  if (!el) return;
+  el.textContent = fresh ? ' rescanning...' : '';
+  const res = await chrome.runtime.sendMessage({ type: 'repos', fresh: !!fresh });
+  if (res && res.ok) {
+    el.textContent = ` ${res.repos.length} repositories reachable; a project is matched to one by name.`;
+  } else if (res) {
+    el.textContent = ` ${res.error}`;
+  }
+}
+
+if ($('rescan')) {
+  $('rescan').addEventListener('click', () => repoCount(true));
+  repoCount(false);
 }

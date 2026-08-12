@@ -17,14 +17,80 @@ async function settings() {
 
 // Where a given project goes.
 //
-// The default is the shared mirror: one repo, every project under
-// overleaf/<id>/, no per-project setup. That is what makes this work across
-// hundreds of projects. But a project that has a repo of its own should push
-// there instead, at the repo root, so that pressing the button in Overleaf
-// updates the actual project rather than a backup nobody reads. A route says so.
-async function routeFor(projectId, cfg) {
+// A project with a repo of its own should push there, at the repo root, so that
+// pressing the button in Overleaf updates the real project rather than a backup
+// nobody reads. Anything else falls back to the shared mirror, one repo with
+// every project under overleaf/<id>/, which needs no setup at all.
+//
+// Which repo is which is worked out below without asking the user, because
+// asking per project does not scale to hundreds of them.
+
+// Every repository the token can actually write to.
+//
+// A GitHub App token answers this directly: /installation/repositories is the
+// list of repos the app was installed on, which is exactly the set of possible
+// targets. A classic OAuth token has no such endpoint, so fall back to /user/repos.
+// Cached, because it changes about as often as someone installs an app.
+const REPO_TTL = 60 * 60 * 1000;
+
+async function accessibleRepos(cfg, { fresh = false } = {}) {
+  const { repoCache } = await chrome.storage.local.get('repoCache');
+  if (!fresh && repoCache && Date.now() - repoCache.at < REPO_TTL) return repoCache.repos;
+
+  const repos = [];
+  for (const path of ['/installation/repositories?per_page=100', '/user/repos?per_page=100&sort=pushed']) {
+    try {
+      let page = 1;
+      for (;;) {
+        const url = path.includes('installation')
+          ? `/installation/repositories?per_page=100&page=${page}`
+          : `/user/repos?per_page=100&sort=pushed&page=${page}`;
+        const r = await gh(url, {}, cfg);
+        const batch = Array.isArray(r) ? r : (r.repositories || []);
+        for (const x of batch) {
+          repos.push({
+            owner: x.owner.login, name: x.name,
+            branch: x.default_branch || 'main',
+            empty: x.size === 0,
+          });
+        }
+        if (batch.length < 100) break;
+        if (++page > 10) break;
+      }
+      if (repos.length) break;      // the first endpoint that answers wins
+    } catch (_) { /* try the next shape */ }
+  }
+  await chrome.storage.local.set({ repoCache: { at: Date.now(), repos } });
+  return repos;
+}
+
+const slug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+// Overleaf cannot say which repo a project belongs to: for a project made by a
+// one-time import it holds no link at all, and its API knows only about projects
+// using Overleaf's own GitHub sync. So ask GitHub instead. If exactly one
+// reachable repository has the project's name, that is the answer, and no
+// per-project setup is needed.
+async function discover(projectName, cfg) {
+  if (!projectName) return null;
+  const want = slug(projectName);
+  if (!want) return null;
+  const repos = await accessibleRepos(cfg);
+  const hits = repos.filter(r => slug(r.name) === want && !r.empty);
+  if (hits.length !== 1) return null;                 // ambiguous or absent: do nothing
+  if (slug(hits[0].name) === slug(cfg.repo)) return null;   // that is the mirror itself
+  return hits[0];
+}
+
+async function routeFor(projectId, cfg, projectName) {
   const { routes = {} } = await chrome.storage.local.get('routes');
   const r = routes[projectId];
+
+  // An explicit route always wins, including one that says "use the mirror".
+  if (r && r.mirror) {
+    return { owner: cfg.owner, repo: cfg.repo, branch: cfg.branch,
+             base: `overleaf/${projectId}`, routed: false, why: 'set by hand' };
+  }
   if (r && r.owner && r.repo) {
     return {
       owner: r.owner,
@@ -32,14 +98,23 @@ async function routeFor(projectId, cfg) {
       branch: r.branch || 'main',
       base: (r.path || '').replace(/^\/+|\/+$/g, ''),   // '' means the repo root
       routed: true,
+      why: 'set by hand',
     };
   }
+
+  const found = await discover(projectName, cfg);
+  if (found) {
+    return { owner: found.owner, repo: found.name, branch: found.branch,
+             base: '', routed: true, why: 'matched by name' };
+  }
+
   return {
     owner: cfg.owner,
     repo: cfg.repo,
     branch: cfg.branch,
     base: `overleaf/${projectId}`,
     routed: false,
+    why: 'no repository of this name',
   };
 }
 
@@ -152,7 +227,7 @@ function b64(bytes) {
 // --- the actual sync -------------------------------------------------------
 async function sync({ projectId, projectName, pdfUrl }, report) {
   const cfg = await settings();
-  const dest = await routeFor(projectId, cfg);
+  const dest = await routeFor(projectId, cfg, projectName);
   const base = dest.base;
   await assertWritable(dest, cfg);
 
@@ -292,11 +367,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // So the page can say where the button will push, before it is pressed.
   if (msg.type === 'where') {
     settings()
-      .then(cfg => routeFor(msg.projectId, cfg))
+      .then(cfg => routeFor(msg.projectId, cfg, msg.projectName))
       .then(d => sendResponse({
         ok: true, owner: d.owner, repo: d.repo, branch: d.branch,
-        path: d.base, routed: d.routed,
+        path: d.base, routed: d.routed, why: d.why,
       }))
+      .catch(e => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
+  if (msg.type === 'repos') {
+    settings()
+      .then(cfg => accessibleRepos(cfg, { fresh: !!msg.fresh }))
+      .then(repos => sendResponse({ ok: true, repos }))
       .catch(e => sendResponse({ ok: false, error: String(e.message || e) }));
     return true;
   }

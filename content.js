@@ -138,15 +138,17 @@ function init() {
   // Say where the button will push before it is pressed. Pressing a button
   // labelled "Push to git" and finding the work somewhere else is the whole
   // failure this is meant to prevent.
-  chrome.runtime.sendMessage({ type: 'where', projectId: PROJECT_ID }).then(w => {
+  chrome.runtime.sendMessage({
+    type: 'where', projectId: PROJECT_ID, projectName: projectName(),
+  }).then(w => {
     if (!w || !w.ok) return;
     const target = w.path ? `${w.owner}/${w.repo}/${w.path}` : `${w.owner}/${w.repo}`;
     btn.dataset.target = target;
     btn.textContent = w.routed ? `Push to ${w.repo}` : 'Push to mirror';
     btn.title = w.routed
-      ? `Pushes to ${target} on ${w.branch}.`
-      : `Pushes to the mirror ${target} on ${w.branch}. `
-        + 'To send this project to its own repo instead, set a route in the extension options.';
+      ? `Pushes to ${target} on ${w.branch} (${w.why}).`
+      : `Pushes to the mirror ${target} on ${w.branch}, because ${w.why}. `
+        + 'Name a repository after the project, or set a route in the extension options.';
   }).catch(() => {});
 
   // Tell him when the loaded copy is behind the source, rather than letting him
